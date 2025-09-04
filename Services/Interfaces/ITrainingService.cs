@@ -2,6 +2,7 @@
 using SkillsAuditSystem.Models.Entities;
 using SkillsAuditSystem.Models.ViewModels.Training;
 using SkillsAuditSystem.Models.DTOs;
+using SkillsAuditSystem.Services.Implementation;
 
 namespace SkillsAuditSystem.Services.Interfaces
 {

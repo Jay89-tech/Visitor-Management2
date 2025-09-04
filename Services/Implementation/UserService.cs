@@ -104,7 +104,7 @@ namespace SkillsAuditSystem.Services.Implementation
                     { "department", model.Department },
                     { "phoneNumber", model.PhoneNumber ?? "" },
                     { "position", model.Position ?? "" },
-                    { "updatedAt", DateTime.UtcNow }
+                    { "updatedAt", Timestamp.FromDateTime(DateTime.UtcNow) }
                 };
 
                 await _firestoreDb.Collection("users").Document(userId).UpdateAsync(updates);
@@ -122,8 +122,13 @@ namespace SkillsAuditSystem.Services.Implementation
             try
             {
                 // Soft delete - mark as inactive
-                await _firestoreDb.Collection("users").Document(userId)
-                    .UpdateAsync("isActive", false, "updatedAt", DateTime.UtcNow);
+                var updates = new Dictionary<string, object>
+                {
+                    { "isActive", false },
+                    { "updatedAt", Timestamp.FromDateTime(DateTime.UtcNow) }
+                };
+
+                await _firestoreDb.Collection("users").Document(userId).UpdateAsync(updates);
                 return true;
             }
             catch (Exception ex)
@@ -196,8 +201,12 @@ namespace SkillsAuditSystem.Services.Implementation
         {
             try
             {
-                await _firestoreDb.Collection("users").Document(userId)
-                    .UpdateAsync("role", role, "updatedAt", DateTime.UtcNow);
+                var updates = new Dictionary<string, object>
+                {
+                    { "role", role },
+                    { "updatedAt", Timestamp.FromDateTime(DateTime.UtcNow) }
+                };
+                await _firestoreDb.Collection("users").Document(userId).UpdateAsync(updates);
                 return true;
             }
             catch (Exception ex)
@@ -211,8 +220,12 @@ namespace SkillsAuditSystem.Services.Implementation
         {
             try
             {
-                await _firestoreDb.Collection("users").Document(userId)
-                    .UpdateAsync("isActive", true, "updatedAt", DateTime.UtcNow);
+                var updates = new Dictionary<string, object>
+                {
+                    { "isActive", true },
+                    { "updatedAt", Timestamp.FromDateTime(DateTime.UtcNow) }
+                };
+                await _firestoreDb.Collection("users").Document(userId).UpdateAsync(updates);
                 return true;
             }
             catch (Exception ex)
@@ -226,8 +239,12 @@ namespace SkillsAuditSystem.Services.Implementation
         {
             try
             {
-                await _firestoreDb.Collection("users").Document(userId)
-                    .UpdateAsync("isActive", false, "updatedAt", DateTime.UtcNow);
+                var updates = new Dictionary<string, object>
+                {
+                    { "isActive", false },
+                    { "updatedAt", Timestamp.FromDateTime(DateTime.UtcNow) }
+                };
+                await _firestoreDb.Collection("users").Document(userId).UpdateAsync(updates);
                 return true;
             }
             catch (Exception ex)
@@ -277,7 +294,7 @@ namespace SkillsAuditSystem.Services.Implementation
                     { "phoneNumber", model.PhoneNumber ?? "" },
                     { "position", model.Position ?? "" },
                     { "department", model.Department },
-                    { "updatedAt", DateTime.UtcNow }
+                    { "updatedAt", Timestamp.FromDateTime(DateTime.UtcNow) }
                 };
 
                 await _firestoreDb.Collection("users").Document(userId).UpdateAsync(updates);
@@ -341,7 +358,8 @@ namespace SkillsAuditSystem.Services.Implementation
                 if (!userDoc.Exists)
                     return false;
 
-                return userDoc.GetValue<bool>("isActive");
+                // GetValue handles null/missing fields gracefully
+                return userDoc.GetValue<bool?>("isActive") ?? false;
             }
             catch (Exception ex)
             {

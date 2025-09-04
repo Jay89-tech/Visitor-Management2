@@ -1,28 +1,33 @@
-﻿// Services/Implementation/FirebaseAuthService.cs
-using Firebase.Auth;
-using Google.Cloud.Firestore;
-using SkillsAuditSystem.Services.Interfaces;
-using SkillsAuditSystem.Models.ViewModels.Auth;
-using SkillsAuditSystem.Models.Entities;
-using System.Text.Json;
+﻿using FirebaseAdmin;
 using FirebaseAdmin.Auth;
-using SkillsAuditSystem.Configuration;
+using Google.Cloud.Firestore;
+using SkillsAuditSystem.Models.Entities;
+using SkillsAuditSystem.Models.ViewModels.Auth;
+using SkillsAuditSystem.Services.Interfaces;
+using System.Net.Http;
+using System.Text;
+using System.Text.Json;
 
 namespace SkillsAuditSystem.Services.Implementation
 {
     public class FirebaseAuthService : IAuthService
     {
-        private readonly FirebaseAuthProvider _authProvider;
+        private readonly HttpClient _httpClient;
         private readonly FirestoreDb _firestoreDb;
         private readonly ILogger<FirebaseAuthService> _logger;
         private readonly IConfiguration _configuration;
+        private readonly string _apiKey;
+        private readonly string _authUrl;
 
-        public FirebaseAuthService(ILogger<FirebaseAuthService> logger, IConfiguration configuration)
+        public FirebaseAuthService(ILogger<FirebaseAuthService> logger, IConfiguration configuration, HttpClient httpClient)
         {
             _logger = logger;
             _configuration = configuration;
-            var apiKey = _configuration["Firebase:ApiKey"];
-            _authProvider = new FirebaseAuthProvider(new FirebaseConfig(apiKey));
+            _httpClient = httpClient;
+            _apiKey = _configuration["Firebase:ApiKey"];
+            _authUrl = "https://identitytoolkit.googleapis.com/v1/accounts";
+
+            // Initialize Firestore
             _firestoreDb = FirestoreDb.Create(_configuration["Firebase:ProjectId"]);
         }
 
@@ -30,15 +35,34 @@ namespace SkillsAuditSystem.Services.Implementation
         {
             try
             {
-                var auth = await _authProvider.SignInWithEmailAndPasswordAsync(model.Email, model.Password);
+                var requestBody = new
+                {
+                    email = model.Email,
+                    password = model.Password,
+                    returnSecureToken = true
+                };
 
-                if (auth?.User == null)
+                var json = JsonSerializer.Serialize(requestBody);
+                var content = new StringContent(json, Encoding.UTF8, "application/json");
+
+                var response = await _httpClient.PostAsync($"{_authUrl}:signInWithPassword?key={_apiKey}", content);
+                var responseContent = await response.Content.ReadAsStringAsync();
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    var errorResponse = JsonSerializer.Deserialize<FirebaseErrorResponse>(responseContent);
+                    return new AuthResult { Success = false, Message = GetAuthErrorMessage(errorResponse?.Error?.Message) };
+                }
+
+                var authResponse = JsonSerializer.Deserialize<FirebaseAuthResponse>(responseContent);
+
+                if (authResponse == null || string.IsNullOrEmpty(authResponse.LocalId))
                 {
                     return new AuthResult { Success = false, Message = "Invalid login credentials" };
                 }
 
                 // Get user data from Firestore
-                var userDoc = await _firestoreDb.Collection("users").Document(auth.User.LocalId).GetSnapshotAsync();
+                var userDoc = await _firestoreDb.Collection("users").Document(authResponse.LocalId).GetSnapshotAsync();
                 if (!userDoc.Exists)
                 {
                     return new AuthResult { Success = false, Message = "User profile not found" };
@@ -56,16 +80,11 @@ namespace SkillsAuditSystem.Services.Implementation
                 {
                     Success = true,
                     Message = "Login successful",
-                    UserId = auth.User.LocalId,
-                    Token = auth.FirebaseToken,
-                    Email = auth.User.Email,
+                    UserId = authResponse.LocalId,
+                    Token = authResponse.IdToken,
+                    Email = authResponse.Email,
                     Role = userData.ContainsKey("role") ? userData["role"].ToString() : "employee"
                 };
-            }
-            catch (FirebaseAuthException ex)
-            {
-                _logger.LogError(ex, "Firebase authentication error during login");
-                return new AuthResult { Success = false, Message = GetAuthErrorMessage(ex.Reason) };
             }
             catch (Exception ex)
             {
@@ -90,10 +109,28 @@ namespace SkillsAuditSystem.Services.Implementation
                     return new AuthResult { Success = false, Message = "Employee ID already registered" };
                 }
 
-                // Create Firebase Auth user
-                var auth = await _authProvider.CreateUserWithEmailAndPasswordAsync(model.Email, model.Password);
+                var requestBody = new
+                {
+                    email = model.Email,
+                    password = model.Password,
+                    returnSecureToken = true
+                };
 
-                if (auth?.User == null)
+                var json = JsonSerializer.Serialize(requestBody);
+                var content = new StringContent(json, Encoding.UTF8, "application/json");
+
+                var response = await _httpClient.PostAsync($"{_authUrl}:signUp?key={_apiKey}", content);
+                var responseContent = await response.Content.ReadAsStringAsync();
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    var errorResponse = JsonSerializer.Deserialize<FirebaseErrorResponse>(responseContent);
+                    return new AuthResult { Success = false, Message = GetAuthErrorMessage(errorResponse?.Error?.Message) };
+                }
+
+                var authResponse = JsonSerializer.Deserialize<FirebaseAuthResponse>(responseContent);
+
+                if (authResponse == null || string.IsNullOrEmpty(authResponse.LocalId))
                 {
                     return new AuthResult { Success = false, Message = "Failed to create user account" };
                 }
@@ -101,7 +138,7 @@ namespace SkillsAuditSystem.Services.Implementation
                 // Create user profile in Firestore
                 var user = new User
                 {
-                    Id = auth.User.LocalId,
+                    Id = authResponse.LocalId,
                     FirstName = model.FirstName,
                     LastName = model.LastName,
                     Email = model.Email,
@@ -113,22 +150,17 @@ namespace SkillsAuditSystem.Services.Implementation
                     UpdatedAt = DateTime.UtcNow
                 };
 
-                await _firestoreDb.Collection("users").Document(auth.User.LocalId).SetAsync(user);
+                await _firestoreDb.Collection("users").Document(authResponse.LocalId).SetAsync(user);
 
                 return new AuthResult
                 {
                     Success = true,
                     Message = "Registration successful",
-                    UserId = auth.User.LocalId,
-                    Token = auth.FirebaseToken,
-                    Email = auth.User.Email,
+                    UserId = authResponse.LocalId,
+                    Token = authResponse.IdToken,
+                    Email = authResponse.Email,
                     Role = "employee"
                 };
-            }
-            catch (FirebaseAuthException ex)
-            {
-                _logger.LogError(ex, "Firebase authentication error during registration");
-                return new AuthResult { Success = false, Message = GetAuthErrorMessage(ex.Reason) };
             }
             catch (Exception ex)
             {
@@ -141,13 +173,25 @@ namespace SkillsAuditSystem.Services.Implementation
         {
             try
             {
-                await _authProvider.SendPasswordResetEmailAsync(email);
+                var requestBody = new
+                {
+                    requestType = "PASSWORD_RESET",
+                    email = email
+                };
+
+                var json = JsonSerializer.Serialize(requestBody);
+                var content = new StringContent(json, Encoding.UTF8, "application/json");
+
+                var response = await _httpClient.PostAsync($"{_authUrl}:sendOobCode?key={_apiKey}", content);
+                var responseContent = await response.Content.ReadAsStringAsync();
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    var errorResponse = JsonSerializer.Deserialize<FirebaseErrorResponse>(responseContent);
+                    return new AuthResult { Success = false, Message = GetAuthErrorMessage(errorResponse?.Error?.Message) };
+                }
+
                 return new AuthResult { Success = true, Message = "Password reset email sent successfully" };
-            }
-            catch (FirebaseAuthException ex)
-            {
-                _logger.LogError(ex, "Firebase authentication error during password reset");
-                return new AuthResult { Success = false, Message = GetAuthErrorMessage(ex.Reason) };
             }
             catch (Exception ex)
             {
@@ -161,8 +205,12 @@ namespace SkillsAuditSystem.Services.Implementation
             try
             {
                 // Update user's last activity
-                await _firestoreDb.Collection("users").Document(uid)
-                    .UpdateAsync("lastActivity", DateTime.UtcNow);
+                var updates = new Dictionary<string, object>
+                {
+                    { "lastActivity", DateTime.UtcNow }
+                };
+
+                await _firestoreDb.Collection("users").Document(uid).UpdateAsync(updates);
                 return true;
             }
             catch (Exception ex)
@@ -211,7 +259,15 @@ namespace SkillsAuditSystem.Services.Implementation
                 var email = userDoc.GetValue<string>("email");
 
                 // Verify current password by attempting to sign in
-                await _authProvider.SignInWithEmailAndPasswordAsync(email, currentPassword);
+                var loginResult = await LoginAsync(new LoginViewModel { Email = email, Password = currentPassword });
+                if (!loginResult.Success) return false;
+
+                // Check if Firebase Admin is initialized before using it
+                if (FirebaseApp.DefaultInstance == null)
+                {
+                    _logger.LogWarning("Firebase Admin not initialized - cannot change password server-side");
+                    return false;
+                }
 
                 // Update password using Firebase Admin SDK
                 var userRecord = await FirebaseAuth.DefaultInstance.UpdateUserAsync(new UserRecordArgs
@@ -233,6 +289,13 @@ namespace SkillsAuditSystem.Services.Implementation
         {
             try
             {
+                // Check if Firebase Admin is initialized before using it
+                if (FirebaseApp.DefaultInstance == null)
+                {
+                    _logger.LogWarning("Firebase Admin not initialized - cannot update email server-side");
+                    return false;
+                }
+
                 var userRecord = await FirebaseAuth.DefaultInstance.UpdateUserAsync(new UserRecordArgs
                 {
                     Uid = uid,
@@ -240,8 +303,13 @@ namespace SkillsAuditSystem.Services.Implementation
                 });
 
                 // Update email in Firestore as well
-                await _firestoreDb.Collection("users").Document(uid)
-                    .UpdateAsync("email", newEmail, "updatedAt", DateTime.UtcNow);
+                var updates = new Dictionary<string, object>
+                {
+                    { "email", newEmail },
+                    { "updatedAt", DateTime.UtcNow }
+                };
+
+                await _firestoreDb.Collection("users").Document(uid).UpdateAsync(updates);
 
                 return userRecord != null;
             }
@@ -286,19 +354,40 @@ namespace SkillsAuditSystem.Services.Implementation
             }
         }
 
-        private string GetAuthErrorMessage(AuthErrorReason reason)
+        private string GetAuthErrorMessage(string errorMessage)
         {
-            return reason switch
+            return errorMessage switch
             {
-                AuthErrorReason.UserNotFound => "No account found with this email address",
-                AuthErrorReason.WrongPassword => "Invalid password",
-                AuthErrorReason.InvalidEmailAddress => "Invalid email address format",
-                AuthErrorReason.EmailExists => "An account already exists with this email",
-                AuthErrorReason.WeakPassword => "Password is too weak",
-                AuthErrorReason.TooManyAttempts => "Too many failed attempts. Please try again later",
-                AuthErrorReason.UserDisabled => "This account has been disabled",
+                "EMAIL_NOT_FOUND" => "No account found with this email address",
+                "INVALID_PASSWORD" => "Invalid password",
+                "INVALID_EMAIL" => "Invalid email address format",
+                "EMAIL_EXISTS" => "An account already exists with this email",
+                "WEAK_PASSWORD" => "Password is too weak",
+                "TOO_MANY_ATTEMPTS_TRY_LATER" => "Too many failed attempts. Please try again later",
+                "USER_DISABLED" => "This account has been disabled",
                 _ => "Authentication failed. Please try again"
             };
         }
+    }
+
+    // Helper classes for Firebase REST API responses
+    public class FirebaseAuthResponse
+    {
+        public string IdToken { get; set; } = string.Empty;
+        public string Email { get; set; } = string.Empty;
+        public string RefreshToken { get; set; } = string.Empty;
+        public string ExpiresIn { get; set; } = string.Empty;
+        public string LocalId { get; set; } = string.Empty;
+    }
+
+    public class FirebaseErrorResponse
+    {
+        public FirebaseError Error { get; set; } = new();
+    }
+
+    public class FirebaseError
+    {
+        public int Code { get; set; }
+        public string Message { get; set; } = string.Empty;
     }
 }
