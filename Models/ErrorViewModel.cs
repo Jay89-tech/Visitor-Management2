@@ -1,0 +1,10 @@
+// Models/ErrorViewModel.cs (already exists but completing for reference)
+namespace SkillsAuditSystem.Models
+{
+    public class ErrorViewModel
+    {
+        public string? RequestId { get; set; }
+
+        public bool ShowRequestId => !string.IsNullOrEmpty(RequestId);
+    }
+}

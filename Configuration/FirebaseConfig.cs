@@ -7,8 +7,8 @@ namespace SkillsAuditSystem.Configuration
     {
         public static void Initialize(IConfiguration configuration)
         {
-            var credentialsPath = configuration["Firebase:CredentialsPath"];
-            var projectId = configuration["Firebase:ProjectId"];
+            var credentialsPath = configuration["firebase-credentials.json"];
+            var projectId = configuration["testing-827ee"];
 
             Environment.SetEnvironmentVariable("GOOGLE_APPLICATION_CREDENTIALS", credentialsPath);
 
