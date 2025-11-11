@@ -11,6 +11,7 @@ import '../profile/profile_screen.dart';
 import 'widgets/stat_card.dart';
 import 'widgets/quick_action_button.dart';
 import 'widgets/upcoming_visit_card.dart';
+import '../../screens/scanner/qr_scanner_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -308,10 +309,10 @@ class _HomeScreenState extends State<HomeScreen> {
                   label: 'Scan QR',
                   gradient: AppTheme.successGradient,
                   onTap: () {
-                    // TODO: Navigate to QR scanner
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('QR Scanner coming soon!'),
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => const QRScannerScreen(),
                       ),
                     );
                   },
