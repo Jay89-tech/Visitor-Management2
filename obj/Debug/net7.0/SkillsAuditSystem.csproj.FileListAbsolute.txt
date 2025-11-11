@@ -1,9 +1,0 @@
-C:\Users\Junio\source\repos\SkillsAuditSystem\obj\Debug\net7.0\SkillsAuditSystem.csproj.AssemblyReference.cache
-C:\Users\Junio\source\repos\SkillsAuditSystem\obj\Debug\net7.0\SkillsAuditSystem.GeneratedMSBuildEditorConfig.editorconfig
-C:\Users\Junio\source\repos\SkillsAuditSystem\obj\Debug\net7.0\SkillsAuditSystem.AssemblyInfoInputs.cache
-C:\Users\Junio\source\repos\SkillsAuditSystem\obj\Debug\net7.0\SkillsAuditSystem.AssemblyInfo.cs
-C:\Users\Junio\source\repos\SkillsAuditSystem\obj\Debug\net7.0\SkillsAuditSystem.csproj.CoreCompileInputs.cache
-C:\Users\Junio\source\repos\SkillsAuditSystem\obj\Debug\net7.0\SkillsAuditSystem.MvcApplicationPartsAssemblyInfo.cache
-C:\Users\Junio\source\repos\SkillsAuditSystem\obj\Debug\net7.0\SkillsAuditSystem.RazorAssemblyInfo.cache
-C:\Users\Junio\source\repos\SkillsAuditSystem\obj\Debug\net7.0\SkillsAuditSystem.RazorAssemblyInfo.cs
-C:\Users\Junio\source\repos\SkillsAuditSystem\obj\Debug\net7.0\rpswa.dswa.cache.json
