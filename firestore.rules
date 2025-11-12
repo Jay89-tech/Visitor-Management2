@@ -1,0 +1,204 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper Functions
+    // ================
+    
+    // Check if user is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    // Check if user is admin (custom claim)
+    function isAdmin() {
+      return isAuthenticated() && 
+             request.auth.token.get('admin', false) == true;
+    }
+    
+    // Check if user is security/receptionist
+    function isSecurity() {
+      return isAuthenticated() && 
+             (request.auth.token.get('security', false) == true ||
+              request.auth.token.get('admin', false) == true);
+    }
+    
+    // Check if user owns the resource
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    // Validate email format
+    function isValidEmail(email) {
+      return email.matches('^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$');
+    }
+    
+    // Validate phone format
+    function isValidPhone(phone) {
+      return phone.matches('^\\+?[0-9]{10,15}$');
+    }
+    
+    // Validate future date
+    function isFutureDate(date) {
+      return date > request.time;
+    }
+    
+    // Validate visit status
+    function isValidVisitStatus(status) {
+      return status in ['pending', 'approved', 'denied', 'cancelled'];
+    }
+    
+    // VISITORS COLLECTION
+    // ===================
+    match /visitors/{visitorId} {
+      // Visitors can read and update their own profile
+      allow read: if isOwner(visitorId) || isAdmin();
+      
+      allow create: if isAuthenticated() &&
+                       request.auth.uid == visitorId &&
+                       request.resource.data.keys().hasAll([
+                         'email', 'fullName', 'phone', 'company'
+                       ]) &&
+                       isValidEmail(request.resource.data.email) &&
+                       isValidPhone(request.resource.data.phone) &&
+                       request.resource.data.fullName.size() >= 2 &&
+                       request.resource.data.company.size() >= 2;
+      
+      allow update: if isOwner(visitorId) &&
+                       // Cannot change email or id
+                       request.resource.data.email == resource.data.email &&
+                       // Validate data types
+                       request.resource.data.fullName is string &&
+                       request.resource.data.phone is string &&
+                       request.resource.data.company is string;
+      
+      allow delete: if false; // Prevent deletion, use soft delete instead
+    }
+    
+    // VISITS COLLECTION
+    // =================
+    match /visits/{visitId} {
+      // Visitors can read their own visits
+      // Admins can read all visits
+      allow read: if isAuthenticated() && 
+                     (resource.data.visitorId == request.auth.uid || isAdmin());
+      
+      // Visitors can create visits
+      allow create: if isAuthenticated() &&
+                       request.resource.data.visitorId == request.auth.uid &&
+                       request.resource.data.keys().hasAll([
+                         'visitorId', 'visitorName', 'visitorEmail',
+                         'visitorPhone', 'visitorCompany', 'purposeOfVisit',
+                         'hostName', 'hostDepartment', 'visitDate',
+                         'expectedArrivalTime', 'expectedDepartureTime',
+                         'status', 'createdAt', 'updatedAt'
+                       ]) &&
+                       // Status must be pending for new visits
+                       request.resource.data.status == 'pending' &&
+                       // Visit date must be in the future or today
+                       request.resource.data.visitDate >= request.time &&
+                       // Arrival must be before departure
+                       request.resource.data.expectedArrivalTime < 
+                       request.resource.data.expectedDepartureTime &&
+                       // Validate data types and lengths
+                       request.resource.data.purposeOfVisit.size() >= 3 &&
+                       request.resource.data.hostName.size() >= 2;
+      
+      // Visitors can cancel their own pending visits
+      allow update: if isAuthenticated() &&
+                       resource.data.visitorId == request.auth.uid &&
+                       resource.data.status == 'pending' &&
+                       request.resource.data.status == 'cancelled';
+      
+      // Admins can update visit status and add QR codes
+      allow update: if isAdmin() &&
+                       // Can only modify specific fields
+                       request.resource.data.diff(resource.data).affectedKeys()
+                         .hasOnly(['status', 'approvedBy', 'approvedByName', 
+                                  'approvedAt', 'denialReason', 'deniedBy',
+                                  'deniedAt', 'qrCode', 'updatedAt']) &&
+                       // Status must be valid
+                       isValidVisitStatus(request.resource.data.status);
+      
+      // Security can update check-in/check-out fields
+      allow update: if isSecurity() &&
+                       request.resource.data.diff(resource.data).affectedKeys()
+                         .hasOnly(['checkedIn', 'checkedOut', 'checkInId',
+                                  'actualArrivalTime', 'actualDepartureTime', 
+                                  'updatedAt']);
+      
+      allow delete: if false; // Prevent deletion
+    }
+    
+    // CHECK-INS COLLECTION
+    // ====================
+    match /checkins/{checkInId} {
+      // Visitors can read their own check-ins
+      // Admins and security can read all
+      allow read: if isAuthenticated() &&
+                     (resource.data.visitorId == request.auth.uid || 
+                      isAdmin() || 
+                      isSecurity());
+      
+      // Only security/admin can create check-ins
+      allow create: if isSecurity() &&
+                       request.resource.data.keys().hasAll([
+                         'visitId', 'visitorId', 'checkInTime',
+                         'checkInLocation', 'verifiedBy', 'createdAt'
+                       ]) &&
+                       request.resource.data.checkInTime <= request.time;
+      
+      // Only security/admin can update (for check-out)
+      allow update: if isSecurity() &&
+                       // Can only add check-out fields
+                       !resource.data.keys().hasAny(['checkOutTime']) &&
+                       request.resource.data.diff(resource.data).affectedKeys()
+                         .hasOnly(['checkOutTime', 'checkOutLocation']);
+      
+      allow delete: if false; // Prevent deletion
+    }
+    
+    // NOTIFICATIONS COLLECTION
+    // ========================
+    match /notifications/{notificationId} {
+      // Users can only read their own notifications
+      allow read: if isAuthenticated() &&
+                     resource.data.userId == request.auth.uid;
+      
+      // Only system (via Cloud Functions) can create notifications
+      allow create: if false;
+      
+      // Users can mark their own notifications as read
+      allow update: if isAuthenticated() &&
+                       resource.data.userId == request.auth.uid &&
+                       request.resource.data.diff(resource.data).affectedKeys()
+                         .hasOnly(['isRead', 'readAt']) &&
+                       request.resource.data.isRead == true;
+      
+      // Users can delete their own notifications
+      allow delete: if isAuthenticated() &&
+                       resource.data.userId == request.auth.uid;
+    }
+    
+    // ADMINS COLLECTION
+    // =================
+    match /admins/{adminId} {
+      // Only admins can read admin data
+      allow read: if isAdmin();
+      
+      // Only super admins can create/update admins
+      allow write: if isAdmin() && 
+                      request.auth.token.get('superAdmin', false) == true;
+    }
+    
+    // QR VALIDATION LOGS (Optional)
+    // ==============================
+    match /qr_validation_logs/{logId} {
+      // Only security and admins can read logs
+      allow read: if isSecurity() || isAdmin();
+      
+      // Only system can write logs
+      allow write: if false;
+    }
+  }
+}
