@@ -1,10 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'dart:io';
+import 'package:image_picker/image_picker.dart';
 import '../../providers/auth_provider.dart';
-import '../../services/storage_service.dart';
 import '../../utils/app_theme.dart';
-import '../splash_screen.dart';
+import '../../screens/splash_screen.dart';
 
 class EditProfileScreen extends StatefulWidget {
   const EditProfileScreen({super.key});
@@ -18,11 +17,10 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   final _fullNameController = TextEditingController();
   final _phoneController = TextEditingController();
   final _companyController = TextEditingController();
-  final _storageService = StorageService();
+  final ImagePicker _picker = ImagePicker();
 
-  File? _selectedImage;
-  bool _isUploading = false;
-  String? _newPhotoUrl;
+  String? _photoUrl;
+  bool _hasChanges = false;
 
   @override
   void initState() {
@@ -33,10 +31,79 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   void _loadUserData() {
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
     final visitor = authProvider.visitorProfile;
+
     if (visitor != null) {
       _fullNameController.text = visitor.fullName;
       _phoneController.text = visitor.phone;
       _companyController.text = visitor.company;
+      _photoUrl = visitor.photoUrl;
+    }
+  }
+
+  Future<void> _pickImage() async {
+    try {
+      final XFile? image = await _picker.pickImage(
+        source: ImageSource.gallery,
+        maxWidth: 512,
+        maxHeight: 512,
+        imageQuality: 85,
+      );
+
+      if (image != null) {
+        setState(() {
+          _photoUrl = image.path;
+          _hasChanges = true;
+        });
+
+        // TODO: Upload image to Firebase Storage
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Image upload feature coming soon'),
+            backgroundColor: AppTheme.warningOrange,
+          ),
+        );
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to pick image: $e'),
+          backgroundColor: AppTheme.dangerRed,
+        ),
+      );
+    }
+  }
+
+  Future<void> _saveChanges() async {
+    if (!_formKey.currentState!.validate()) return;
+
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+
+    final success = await authProvider.updateProfile(
+      fullName: _fullNameController.text.trim(),
+      phone: _phoneController.text.trim(),
+      company: _companyController.text.trim(),
+      photoUrl: _photoUrl,
+    );
+
+    if (!mounted) return;
+
+    if (success) {
+      Navigator.pop(context);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Profile updated successfully'),
+          backgroundColor: AppTheme.successGreen,
+        ),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            authProvider.errorMessage ?? 'Failed to update profile',
+          ),
+          backgroundColor: AppTheme.dangerRed,
+        ),
+      );
     }
   }
 
@@ -48,337 +115,221 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     super.dispose();
   }
 
-  Future<void> _pickImage(ImageSource source) async {
-    File? image;
-    if (source == ImageSource.gallery) {
-      image = await _storageService.pickImageFromGallery();
-    } else {
-      image = await _storageService.pickImageFromCamera();
-    }
-
-    if (image != null) {
-      setState(() => _selectedImage = image);
-    }
-  }
-
-  void _showImagePickerOptions() {
-    showModalBottomSheet(
-      context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (context) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              ListTile(
-                leading: const Icon(Icons.photo_library,
-                    color: AppTheme.primaryBlue),
-                title: const Text('Choose from Gallery'),
-                onTap: () {
-                  Navigator.pop(context);
-                  _pickImage(ImageSource.gallery);
-                },
-              ),
-              ListTile(
-                leading:
-                    const Icon(Icons.camera_alt, color: AppTheme.primaryBlue),
-                title: const Text('Take a Photo'),
-                onTap: () {
-                  Navigator.pop(context);
-                  _pickImage(ImageSource.camera);
-                },
-              ),
-              if (_selectedImage != null || _getCurrentPhotoUrl() != null)
-                ListTile(
-                  leading: const Icon(Icons.delete, color: AppTheme.dangerRed),
-                  title: const Text('Remove Photo'),
-                  onTap: () {
-                    Navigator.pop(context);
-                    setState(() {
-                      _selectedImage = null;
-                      _newPhotoUrl = '';
-                    });
-                  },
-                ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  String? _getCurrentPhotoUrl() {
-    final authProvider = Provider.of<AuthProvider>(context, listen: false);
-    return authProvider.visitorProfile?.photoUrl;
-  }
-
-  Future<void> _handleSave() async {
-    if (!_formKey.currentState!.validate()) return;
-
-    setState(() => _isUploading = true);
-
-    final authProvider = Provider.of<AuthProvider>(context, listen: false);
-
-    try {
-      // Upload image if selected
-      if (_selectedImage != null) {
-        _newPhotoUrl = await _storageService.uploadProfilePhoto(
-          authProvider.currentUser!.uid,
-          _selectedImage!,
-        );
-      }
-
-      // Update profile
-      final success = await authProvider.updateProfile(
-        fullName: _fullNameController.text.trim(),
-        phone: _phoneController.text.trim(),
-        company: _companyController.text.trim(),
-        photoUrl: _newPhotoUrl,
-      );
-
-      if (!mounted) return;
-
-      if (success) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Profile updated successfully'),
-            backgroundColor: AppTheme.successGreen,
-          ),
-        );
-        Navigator.pop(context);
-      } else {
-        throw Exception('Failed to update profile');
-      }
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Error: ${e.toString()}'),
-          backgroundColor: AppTheme.dangerRed,
-        ),
-      );
-    } finally {
-      if (mounted) {
-        setState(() => _isUploading = false);
-      }
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Edit Profile'),
         actions: [
-          TextButton(
-            onPressed: _isUploading ? null : _handleSave,
-            child: Text(
-              'Save',
-              style: TextStyle(
-                color: _isUploading ? Colors.grey : AppTheme.primaryBlue,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
+          Consumer<AuthProvider>(
+            builder: (context, authProvider, _) {
+              return TextButton(
+                onPressed: authProvider.isLoading ? null : _saveChanges,
+                child: authProvider.isLoading
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Text(
+                        'Save',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 16,
+                        ),
+                      ),
+              );
+            },
           ),
         ],
       ),
-      body: Stack(
-        children: [
-          SingleChildScrollView(
-            padding: const EdgeInsets.all(24),
-            child: Form(
-              key: _formKey,
-              child: Column(
-                children: [
-                  // Profile Photo
-                  Center(
-                    child: Stack(
-                      children: [
-                        Container(
-                          width: 120,
-                          height: 120,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            border: Border.all(
-                              color: AppTheme.primaryBlue,
-                              width: 3,
-                            ),
-                            image: _selectedImage != null
-                                ? DecorationImage(
-                                    image: FileImage(_selectedImage!),
-                                    fit: BoxFit.cover,
-                                  )
-                                : _getCurrentPhotoUrl() != null
-                                    ? DecorationImage(
-                                        image: NetworkImage(
-                                            _getCurrentPhotoUrl()!),
-                                        fit: BoxFit.cover,
-                                      )
-                                    : null,
-                            gradient: _selectedImage == null &&
-                                    _getCurrentPhotoUrl() == null
-                                ? AppTheme.primaryGradient
-                                : null,
-                          ),
-                          child: _selectedImage == null &&
-                                  _getCurrentPhotoUrl() == null
-                              ? Center(
-                                  child: Text(
-                                    _fullNameController.text.isNotEmpty
-                                        ? _fullNameController.text[0]
-                                            .toUpperCase()
-                                        : 'V',
-                                    style: const TextStyle(
-                                      fontSize: 48,
-                                      fontWeight: FontWeight.w700,
-                                      color: Colors.white,
-                                    ),
-                                  ),
-                                )
-                              : null,
-                        ),
-                        Positioned(
-                          bottom: 0,
-                          right: 0,
-                          child: GestureDetector(
-                            onTap: _showImagePickerOptions,
-                            child: Container(
-                              width: 40,
-                              height: 40,
+      body: Consumer<AuthProvider>(
+        builder: (context, authProvider, _) {
+          return Stack(
+            children: [
+              SingleChildScrollView(
+                padding: const EdgeInsets.all(24),
+                child: Form(
+                  key: _formKey,
+                  onChanged: () {
+                    setState(() => _hasChanges = true);
+                  },
+                  child: Column(
+                    children: [
+                      // Profile Photo
+                      Center(
+                        child: Stack(
+                          children: [
+                            Container(
+                              width: 120,
+                              height: 120,
                               decoration: BoxDecoration(
-                                color: AppTheme.primaryBlue,
+                                gradient: AppTheme.primaryGradient,
                                 shape: BoxShape.circle,
-                                border: Border.all(
-                                  color: Colors.white,
-                                  width: 3,
+                                boxShadow: [AppTheme.cardShadow],
+                              ),
+                              child: Center(
+                                child: Text(
+                                  _fullNameController.text.isNotEmpty
+                                      ? _fullNameController.text
+                                          .substring(0, 1)
+                                          .toUpperCase()
+                                      : 'V',
+                                  style: const TextStyle(
+                                    fontSize: 48,
+                                    fontWeight: FontWeight.w700,
+                                    color: Colors.white,
+                                  ),
                                 ),
                               ),
-                              child: const Icon(
-                                Icons.camera_alt,
-                                color: Colors.white,
-                                size: 20,
+                            ),
+                            Positioned(
+                              bottom: 0,
+                              right: 0,
+                              child: InkWell(
+                                onTap: _pickImage,
+                                child: Container(
+                                  width: 40,
+                                  height: 40,
+                                  decoration: BoxDecoration(
+                                    color: AppTheme.primaryBlue,
+                                    shape: BoxShape.circle,
+                                    border: Border.all(
+                                      color: Colors.white,
+                                      width: 3,
+                                    ),
+                                  ),
+                                  child: const Icon(
+                                    Icons.camera_alt,
+                                    color: Colors.white,
+                                    size: 20,
+                                  ),
+                                ),
                               ),
                             ),
+                          ],
+                        ),
+                      ),
+
+                      const SizedBox(height: 32),
+
+                      // Full Name
+                      TextFormField(
+                        controller: _fullNameController,
+                        textCapitalization: TextCapitalization.words,
+                        decoration: const InputDecoration(
+                          labelText: 'Full Name',
+                          prefixIcon: Icon(Icons.person_outline),
+                        ),
+                        validator: (value) {
+                          if (value == null || value.isEmpty) {
+                            return 'Please enter your full name';
+                          }
+                          if (value.length < 3) {
+                            return 'Name must be at least 3 characters';
+                          }
+                          return null;
+                        },
+                      ),
+
+                      const SizedBox(height: 20),
+
+                      // Phone
+                      TextFormField(
+                        controller: _phoneController,
+                        keyboardType: TextInputType.phone,
+                        decoration: const InputDecoration(
+                          labelText: 'Phone Number',
+                          prefixIcon: Icon(Icons.phone_outlined),
+                        ),
+                        validator: (value) {
+                          if (value == null || value.isEmpty) {
+                            return 'Please enter your phone number';
+                          }
+                          if (value.length < 10) {
+                            return 'Please enter a valid phone number';
+                          }
+                          return null;
+                        },
+                      ),
+
+                      const SizedBox(height: 20),
+
+                      // Company
+                      TextFormField(
+                        controller: _companyController,
+                        textCapitalization: TextCapitalization.words,
+                        decoration: const InputDecoration(
+                          labelText: 'Company',
+                          prefixIcon: Icon(Icons.business_outlined),
+                        ),
+                        validator: (value) {
+                          if (value == null || value.isEmpty) {
+                            return 'Please enter your company name';
+                          }
+                          return null;
+                        },
+                      ),
+
+                      const SizedBox(height: 32),
+
+                      // Info Box
+                      Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: AppTheme.primaryBlue.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: AppTheme.primaryBlue.withOpacity(0.3),
                           ),
                         ),
-                      ],
-                    ),
-                  ),
-
-                  const SizedBox(height: 40),
-
-                  // Full Name
-                  TextFormField(
-                    controller: _fullNameController,
-                    textCapitalization: TextCapitalization.words,
-                    decoration: const InputDecoration(
-                      labelText: 'Full Name',
-                      prefixIcon: Icon(Icons.person_outline),
-                    ),
-                    validator: (value) {
-                      if (value == null || value.isEmpty) {
-                        return 'Please enter your name';
-                      }
-                      return null;
-                    },
-                  ),
-
-                  const SizedBox(height: 20),
-
-                  // Phone
-                  TextFormField(
-                    controller: _phoneController,
-                    keyboardType: TextInputType.phone,
-                    decoration: const InputDecoration(
-                      labelText: 'Phone Number',
-                      prefixIcon: Icon(Icons.phone_outlined),
-                    ),
-                    validator: (value) {
-                      if (value == null || value.isEmpty) {
-                        return 'Please enter your phone';
-                      }
-                      return null;
-                    },
-                  ),
-
-                  const SizedBox(height: 20),
-
-                  // Company
-                  TextFormField(
-                    controller: _companyController,
-                    textCapitalization: TextCapitalization.words,
-                    decoration: const InputDecoration(
-                      labelText: 'Company',
-                      prefixIcon: Icon(Icons.business_outlined),
-                    ),
-                    validator: (value) {
-                      if (value == null || value.isEmpty) {
-                        return 'Please enter your company';
-                      }
-                      return null;
-                    },
-                  ),
-
-                  const SizedBox(height: 20),
-
-                  // Email (Read Only)
-                  Consumer<AuthProvider>(
-                    builder: (context, authProvider, _) => TextFormField(
-                      initialValue: authProvider.visitorProfile?.email ?? '',
-                      enabled: false,
-                      decoration: InputDecoration(
-                        labelText: 'Email',
-                        prefixIcon: const Icon(Icons.email_outlined),
-                        filled: true,
-                        fillColor: Colors.grey[200],
-                      ),
-                    ),
-                  ),
-
-                  const SizedBox(height: 32),
-
-                  // Info Box
-                  Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: AppTheme.primaryBlue.withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(
-                        color: AppTheme.primaryBlue.withOpacity(0.3),
-                      ),
-                    ),
-                    child: Row(
-                      children: [
-                        const Icon(
-                          Icons.info_outline,
-                          color: AppTheme.primaryBlue,
-                          size: 20,
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Text(
-                            'Your email address cannot be changed',
-                            style: AppTheme.bodySmall.copyWith(
+                        child: Row(
+                          children: [
+                            const Icon(
+                              Icons.info_outline,
                               color: AppTheme.primaryBlue,
+                              size: 20,
                             ),
-                          ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Text(
+                                'Your email address cannot be changed. Contact support if you need to update it.',
+                                style: AppTheme.bodySmall.copyWith(
+                                  color: AppTheme.primaryBlue,
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
-                      ],
-                    ),
+                      ),
+
+                      const SizedBox(height: 24),
+
+                      // Email (Read-only)
+                      TextFormField(
+                        initialValue: authProvider.visitorProfile?.email,
+                        enabled: false,
+                        decoration: InputDecoration(
+                          labelText: 'Email Address',
+                          prefixIcon: const Icon(Icons.email_outlined),
+                          filled: true,
+                          fillColor: Colors.grey[100],
+                        ),
+                      ),
+
+                      const SizedBox(height: 32),
+                    ],
                   ),
-                ],
+                ),
               ),
-            ),
-          ),
-          if (_isUploading)
-            const LoadingOverlay(message: 'Updating profile...'),
-        ],
+              if (authProvider.isLoading)
+                const LoadingOverlay(
+                  message: 'Updating profile...',
+                ),
+            ],
+          );
+        },
       ),
     );
   }
 }
-
-enum ImageSource { gallery, camera }

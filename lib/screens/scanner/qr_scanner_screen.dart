@@ -1,7 +1,8 @@
+// lib/screens/scanner/qr_scanner_screen.dart
+
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
-import 'package:provider/provider.dart';
-import '../../services/firebase_service.dart';
+import '../../services/qr_service.dart';
 import '../../utils/app_theme.dart';
 import 'scan_result_screen.dart';
 import 'dart:async';
@@ -14,89 +15,76 @@ class QRScannerScreen extends StatefulWidget {
 }
 
 class _QRScannerScreenState extends State<QRScannerScreen>
-    with WidgetsBindingObserver {
+    with WidgetsBindingObserver, SingleTickerProviderStateMixin {
   final MobileScannerController _controller = MobileScannerController(
     detectionSpeed: DetectionSpeed.noDuplicates,
     facing: CameraFacing.back,
     torchEnabled: false,
   );
 
+  final QRService _qrService = QRService();
+
   bool _isProcessing = false;
   bool _flashEnabled = false;
-  StreamSubscription<Object?>? _subscription;
+
+  late AnimationController _scanController;
+  late Animation<double> _scanAnimation;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _subscription = _controller.barcodes.listen(_handleBarcode);
+
+    // Scan line animation
+    _scanController = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 2),
+    )..repeat();
+
+    _scanAnimation = Tween<double>(begin: 0, end: 280).animate(_scanController);
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (!_controller.value.isInitialized) return;
+    if (!_controller.isStarting) return;
 
-    switch (state) {
-      case AppLifecycleState.detached:
-      case AppLifecycleState.hidden:
-      case AppLifecycleState.paused:
-        _controller.stop();
-        break;
-      case AppLifecycleState.resumed:
-        _controller.start();
-        break;
-      case AppLifecycleState.inactive:
-        break;
+    if (state == AppLifecycleState.resumed) {
+      _controller.start();
+    } else if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive) {
+      _controller.stop();
     }
   }
 
   void _handleBarcode(BarcodeCapture capture) {
     if (_isProcessing) return;
 
-    final List<Barcode> barcodes = capture.barcodes;
+    final barcodes = capture.barcodes;
     if (barcodes.isEmpty) return;
 
     final barcode = barcodes.first;
     if (barcode.rawValue == null) return;
 
     setState(() => _isProcessing = true);
+
     _processQRCode(barcode.rawValue!);
   }
 
   Future<void> _processQRCode(String qrData) async {
     try {
-      // Vibrate on scan
-      // HapticFeedback.mediumImpact();
+      final validationResult = await _qrService.validateQRCode(qrData);
 
-      final firebaseService =
-          Provider.of<FirebaseService>(context, listen: false);
-
-      // Parse QR data (could be JSON or just visit ID)
-      String visitId;
-      try {
-        final data = qrData.contains('{') ? qrData : '{"visitId": "$qrData"}';
-        visitId = qrData;
-      } catch (e) {
-        visitId = qrData;
-      }
-
-      // Stop scanner
       await _controller.stop();
 
       if (!mounted) return;
 
-      // Navigate to result screen
       await Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (_) => ScanResultScreen(
-            qrData: qrData,
-            visitId: visitId,
-          ),
+          builder: (_) => ScanResultScreen(validationResult: validationResult),
         ),
       );
 
-      // Resume scanner if coming back
       if (mounted) {
         await _controller.start();
         setState(() => _isProcessing = false);
@@ -104,7 +92,9 @@ class _QRScannerScreenState extends State<QRScannerScreen>
     } catch (e) {
       if (mounted) {
         setState(() => _isProcessing = false);
-        _showErrorSnackBar('Error processing QR code');
+
+        _showErrorSnackBar('Error processing QR Code: $e');
+        await _controller.start();
       }
     }
   }
@@ -129,7 +119,7 @@ class _QRScannerScreenState extends State<QRScannerScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _subscription?.cancel();
+    _scanController.dispose();
     _controller.dispose();
     super.dispose();
   }
@@ -140,25 +130,26 @@ class _QRScannerScreenState extends State<QRScannerScreen>
       backgroundColor: Colors.black,
       body: Stack(
         children: [
-          // Camera Preview
+          /// CAMERA
           MobileScanner(
             controller: _controller,
+            onDetect: _handleBarcode,
             errorBuilder: (context, error, child) {
               return _buildErrorView(error);
             },
-            overlayBuilder: (context, constraints) {
-              return _buildScannerOverlay();
-            },
           ),
 
-          // Top Bar
+          /// OVERLAY (placed above camera)
+          _buildScannerOverlay(),
+
+          /// TOP BAR
           SafeArea(
             child: Padding(
               padding: const EdgeInsets.all(16),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  // Back Button
+                  /// BACK BUTTON
                   IconButton(
                     onPressed: () => Navigator.pop(context),
                     icon: Container(
@@ -167,14 +158,11 @@ class _QRScannerScreenState extends State<QRScannerScreen>
                         color: Colors.black54,
                         borderRadius: BorderRadius.circular(12),
                       ),
-                      child: const Icon(
-                        Icons.arrow_back,
-                        color: Colors.white,
-                      ),
+                      child: const Icon(Icons.arrow_back, color: Colors.white),
                     ),
                   ),
 
-                  // Flash Button
+                  /// FLASH
                   IconButton(
                     onPressed: _toggleFlash,
                     icon: Container(
@@ -194,55 +182,13 @@ class _QRScannerScreenState extends State<QRScannerScreen>
             ),
           ),
 
-          // Instructions
+          /// BOTTOM INSTRUCTIONS
           Positioned(
             bottom: 100,
             left: 0,
             right: 0,
             child: Center(
-              child: Container(
-                margin: const EdgeInsets.symmetric(horizontal: 32),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 24,
-                  vertical: 16,
-                ),
-                decoration: BoxDecoration(
-                  color: Colors.black87,
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      _isProcessing
-                          ? Icons.hourglass_empty
-                          : Icons.qr_code_scanner,
-                      color: Colors.white,
-                      size: 32,
-                    ),
-                    const SizedBox(height: 12),
-                    Text(
-                      _isProcessing
-                          ? 'Processing...'
-                          : 'Point camera at QR code',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    const Text(
-                      'The QR code will be scanned automatically',
-                      style: TextStyle(
-                        color: Colors.white70,
-                        fontSize: 12,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                  ],
-                ),
-              ),
+              child: _buildInstructionBox(),
             ),
           ),
         ],
@@ -250,10 +196,12 @@ class _QRScannerScreenState extends State<QRScannerScreen>
     );
   }
 
+  // ---------------- OVERLAY -----------------
+
   Widget _buildScannerOverlay() {
     return Stack(
       children: [
-        // Dark overlay
+        // Dark background with cut-out hole
         ColorFiltered(
           colorFilter: ColorFilter.mode(
             Colors.black.withOpacity(0.5),
@@ -281,7 +229,7 @@ class _QRScannerScreenState extends State<QRScannerScreen>
           ),
         ),
 
-        // Scanning frame
+        // The main frame
         Center(
           child: Container(
             width: 280,
@@ -295,18 +243,13 @@ class _QRScannerScreenState extends State<QRScannerScreen>
             ),
             child: Stack(
               children: [
-                // Corner decorations
                 ..._buildCornerDecorations(),
-
-                // Scanning line animation
                 if (!_isProcessing)
-                  TweenAnimationBuilder<double>(
-                    tween: Tween(begin: 0.0, end: 1.0),
-                    duration: const Duration(seconds: 2),
-                    repeat: true,
-                    builder: (context, value, child) {
+                  AnimatedBuilder(
+                    animation: _scanAnimation,
+                    builder: (context, child) {
                       return Positioned(
-                        top: value * 280,
+                        top: _scanAnimation.value,
                         left: 0,
                         right: 0,
                         child: Container(
@@ -334,38 +277,21 @@ class _QRScannerScreenState extends State<QRScannerScreen>
 
   List<Widget> _buildCornerDecorations() {
     return [
-      // Top Left
-      Positioned(
-        top: -3,
-        left: -3,
-        child: _buildCorner(),
-      ),
-      // Top Right
+      Positioned(top: -3, left: -3, child: _buildCorner()),
       Positioned(
         top: -3,
         right: -3,
-        child: Transform.rotate(
-          angle: 1.5708,
-          child: _buildCorner(),
-        ),
+        child: Transform.rotate(angle: 1.5708, child: _buildCorner()),
       ),
-      // Bottom Left
       Positioned(
         bottom: -3,
         left: -3,
-        child: Transform.rotate(
-          angle: -1.5708,
-          child: _buildCorner(),
-        ),
+        child: Transform.rotate(angle: -1.5708, child: _buildCorner()),
       ),
-      // Bottom Right
       Positioned(
         bottom: -3,
         right: -3,
-        child: Transform.rotate(
-          angle: 3.14159,
-          child: _buildCorner(),
-        ),
+        child: Transform.rotate(angle: 3.14159, child: _buildCorner()),
       ),
     ];
   }
@@ -383,6 +309,44 @@ class _QRScannerScreenState extends State<QRScannerScreen>
     );
   }
 
+  // ---------------- UI SECTIONS -----------------
+
+  Widget _buildInstructionBox() {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 32),
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+      decoration: BoxDecoration(
+        color: Colors.black87,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            _isProcessing ? Icons.hourglass_empty : Icons.qr_code_scanner,
+            color: Colors.white,
+            size: 32,
+          ),
+          const SizedBox(height: 12),
+          Text(
+            _isProcessing ? 'Processing...' : 'Point camera at QR code',
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 4),
+          const Text(
+            'The QR code will be scanned automatically',
+            style: TextStyle(color: Colors.white70, fontSize: 12),
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildErrorView(MobileScannerException error) {
     return Center(
       child: Padding(
@@ -390,11 +354,7 @@ class _QRScannerScreenState extends State<QRScannerScreen>
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(
-              Icons.error_outline,
-              size: 80,
-              color: Colors.red[300],
-            ),
+            Icon(Icons.error_outline, size: 80, color: Colors.red[300]),
             const SizedBox(height: 24),
             const Text(
               'Camera Error',
@@ -407,10 +367,7 @@ class _QRScannerScreenState extends State<QRScannerScreen>
             const SizedBox(height: 12),
             Text(
               error.errorDetails?.message ?? 'Failed to initialize camera',
-              style: const TextStyle(
-                fontSize: 14,
-                color: Colors.white70,
-              ),
+              style: const TextStyle(fontSize: 14, color: Colors.white70),
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 32),
@@ -419,10 +376,8 @@ class _QRScannerScreenState extends State<QRScannerScreen>
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppTheme.primaryBlue,
                 foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 32,
-                  vertical: 16,
-                ),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
               ),
               child: const Text('Go Back'),
             ),
